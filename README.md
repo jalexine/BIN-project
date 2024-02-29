@@ -46,5 +46,3 @@ Ensure the following dependencies are installed:
 
 - Alexine LP
 - Mael Keravis
-```
-
