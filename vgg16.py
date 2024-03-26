@@ -1,92 +1,63 @@
-import os
-import cv2
 import numpy as np
-from skimage.transform import resize
-from tensorflow.keras.applications import VGG16
-from tensorflow.keras.applications.vgg16 import preprocess_input
-import re
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import SelectFromModel
+import os
+from keras.applications.vgg16 import VGG16, preprocess_input
+import imageio
 import pandas as pd
-from keras.applications.vgg16 import preprocess_input as keras_preprocess_input
-from keras.applications.vgg16 import VGG16
-from keras.preprocessing import image
+import cv2
+import csv
 
+# Chemin de l'image d'entrée
+input_img = '/content/gdrive/MyDrive/Colab_Notebooks/PCNA_petit/Copie_de_240222_drug_05_nucleus_182.tif'
+img = imageio.imread(input_img)
 
-# Paths to directories containing images
-directory_hoechst = "/content/HOECHST_small"
-directory_pcna = "/content/PCNA_small"
+# Convertir l'image en BGR (OpenCV utilise BGR au lieu de RGB)
+img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-# Initialize the VGG16 model
-vgg_model = VGG16(weights='imagenet', include_top=True)
+# Redimensionner l'image à 224x224
+img = cv2.resize(img, (224, 224))
 
-# Target size for resizing the images
-target_size = (224, 224)
+# Ajouter une dimension pour le nombre d'échantillons d'entrée
+img = np.expand_dims(img, axis=0)
 
-# Function to read and preprocess images
-def preprocess_image(image_path):
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Image not found: {image_path}")
-    img = image.load_img(image_path, target_size=target_size)
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-    return img_array
+# Définir les dimensions pour l'entrée du modèle
+input_shape = (224, 224, 3)
 
-# Function to extract features with the VGG16 model
-def extract_features(image):
-    features = vgg_model.predict(image)
-    return features.flatten()
+# Modèle VGG16 avec les poids pré-entraînés
+model_vgg16 = VGG16(weights='imagenet', include_top=False, input_shape=input_shape)
 
-# Initialize the array to store features and sample names
-all_features = []
-sample_names = []
+# Prétraiter les données pour qu'elles puissent être alimentées au modèle VGG16
+prep_input_vgg16 = preprocess_input(img)
 
-# Iterate through directories and process each image
-for filename in os.listdir(directory_hoechst):
-    if filename.endswith(".tif"):  # You can adjust the extension based on your files
-        try:
-            sample_name = filename.split(".")[0]  # Retrieve the sample name from the file name
-            sample_names.append(sample_name)  # Add the sample name to the list
+# Extract features from the first 5 layers
+layer_names = ['block1_conv1', 'block1_conv2', 'block2_conv1', 'block2_conv2', 'block3_conv1']
+vgg16_features = []
+for name in layer_names:
+    layer = [l for l in model_vgg16.layers if l.name == name][0]
+    feature = model_vgg16.predict(prep_input_vgg16)[0]
+    vgg16_features.append(feature[:, :, layer.output_shape[-1]])
 
-            # Read and preprocess HOECHST image
-            image_hoechst = preprocess_image(os.path.join(directory_hoechst, filename))
-            # Extract features from HOECHST image
-            features_hoechst = extract_features(image_hoechst)
+# Print shapes of the extracted features
+for i, feature in enumerate(vgg16_features):
+    print(f'Feature shape for layer {layer_names[i]}:', feature.shape)
 
-            # Read and preprocess PCNA image
-            image_pcna = preprocess_image(os.path.join(directory_pcna, filename))
-            # Extract features from PCNA image
-            features_pcna = extract_features(image_pcna)
+# Save features to a CSV file
+output_folder = '/content/gdrive/MyDrive/Colab_Notebooks/PCNA_petit/blabla/'
+filename = os.path.join(output_folder, 'vgg16_features.csv')
 
-            # Concatenate features from both images
-            combined_features = np.concatenate((features_hoechst, features_pcna))
+with open(filename, 'w', newline='') as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(['Layer', 'Feature'])
+    for i, feature in enumerate(vgg16_features):
+        feature_array = feature.flatten()
+        writer.writerow([layer_names[i]] + list(feature_array))
 
-            # Add features to the array
-            all_features.append(combined_features)
-        except Exception as e:
-            print(f"Error processing image {filename}: {e}")
+# Read features from the CSV file
+features = pd.read_csv(filename)
 
-# Convert the array to a numpy array
-all_features = np.array(all_features)
+# Print the number of rows and columns in the features DataFrame
+print('Number of rows:', len(features))
+print('Number of columns:', len(features.columns))
 
-# Initialize the Random Forest model
-rf = RandomForestClassifier(n_estimators=100, random_state=42)
-
-# Select the top 20 features with SelectFromModel
-sfm = SelectFromModel(rf, threshold=-np.inf, max_features=50)
-sfm.fit(all_features, np.ones(all_features.shape[0]))  # Use dummy labels for feature selection
-selected_features = sfm.transform(all_features)
-
-# Convert the selected features to a pandas DataFrame with sample names
-df = pd.DataFrame(selected_features, columns=[f"Feature_{i+1}" for i in range(selected_features.shape[1])])
-df["Sample_Name"] = sample_names
-
-# Specify the path and file name to save the CSV
-csv_path = '/content/selected_features.csv'
-
-# Save the pandas DataFrame to CSV format
-df.to_csv(csv_path, index=False)
-
-print("Processing completed")
+# Print the first 5 rows of the features DataFrame
+print(features.head())
 
